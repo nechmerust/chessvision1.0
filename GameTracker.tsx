@@ -5,33 +5,48 @@ import { CameraView } from "@/components/CameraView";
 import { trpc } from "@/lib/trpc";
 import { Chess } from "chess.js";
 import { Download, Play, Save, Square } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Chessboard } from "react-chessboard";
 import { toast } from "sonner";
+import { type DetectionResult } from "@/lib/boardDetection";
+import { BoardStateTracker } from "@/lib/moveDetection";
 
 export default function GameTracker() {
   const { user, isAuthenticated } = useAuth();
-  const [chess] = useState(() => new Chess());
+  const [chess, setChess] = useState(() => new Chess());
   const [position, setPosition] = useState(chess.fen());
   const [moves, setMoves] = useState<string[]>([]);
   const [currentGameId, setCurrentGameId] = useState<number | null>(null);
   const [isTracking, setIsTracking] = useState(false);
+  const moveTracker = useRef<BoardStateTracker | null>(null);
 
   const createGameMutation = trpc.game.create.useMutation();
   const updateGameMutation = trpc.game.update.useMutation();
 
+  useEffect(() => {
+    if (isTracking && !moveTracker.current) {
+      moveTracker.current = new BoardStateTracker();
+    } else if (!isTracking && moveTracker.current) {
+      moveTracker.current = null;
+    }
+  }, [isTracking]);
+
   const startNewGame = async () => {
     try {
-      chess.reset();
-      setPosition(chess.fen());
+      const newChess = new Chess();
+      setChess(newChess);
+      setPosition(newChess.fen());
       setMoves([]);
-      
+      moveTracker.current?.reset();
+
       if (isAuthenticated) {
         const result = await createGameMutation.mutateAsync({
           title: `Game ${new Date().toLocaleString()}`,
         });
         setCurrentGameId(result.gameId);
         toast.success("New game started!");
+      } else {
+        toast.info("Log in to save your games automatically.");
       }
       setIsTracking(true);
     } catch (error) {
@@ -42,7 +57,7 @@ export default function GameTracker() {
 
   const saveGame = async () => {
     if (!currentGameId || !isAuthenticated) {
-      toast.error("Please log in to save games");
+      toast.error("Log in and start a game to save");
       return;
     }
 
@@ -84,45 +99,48 @@ export default function GameTracker() {
     toast.success("PGN exported!");
   };
 
-  const handleCameraFrame = (imageData: ImageData) => {
-    if (!isTracking) return;
-    
-    // TODO: Implement computer vision processing here
-    // This will be implemented in the next phase
-    console.log("Processing frame:", imageData.width, "x", imageData.height);
-  };
+  const handleCameraFrame = (
+    imageData: ImageData,
+    detection: DetectionResult
+  ) => {
+    if (!isTracking || !detection.detected || !detection.corners || !moveTracker.current) {
+      return;
+    }
 
-  // Manual move input for testing (will be replaced by CV detection)
-  const onDrop = ({ sourceSquare, targetSquare }: { piece: any; sourceSquare: string | null; targetSquare: string | null }) => {
-    if (!sourceSquare || !targetSquare) return false;
-    
-    try {
-      const move = chess.move({
-        from: sourceSquare,
-        to: targetSquare,
-        promotion: "q", // Always promote to queen for now
-      });
+    const detectedMove = moveTracker.current.processFrame(
+      imageData,
+      detection.corners,
+      chess
+    );
 
-      if (move) {
-        setPosition(chess.fen());
-        setMoves([...moves, move.san]);
-        
-        // Auto-save after each move if game exists
-        if (currentGameId && isAuthenticated) {
-          updateGameMutation.mutate({
-            gameId: currentGameId,
-            pgn: chess.pgn(),
-            moves: [...moves, move.san],
-            currentPosition: chess.fen(),
-          });
+    if (detectedMove) {
+      try {
+        const move = chess.move({
+          from: detectedMove.from,
+          to: detectedMove.to,
+          promotion: "q", // Default to queen promotion
+        });
+
+        if (move) {
+          toast.success(`Move detected: ${move.san}`);
+          setPosition(chess.fen());
+          const newMoves = [...moves, move.san];
+          setMoves(newMoves);
+          
+          if (currentGameId && isAuthenticated) {
+            updateGameMutation.mutate({
+              gameId: currentGameId,
+              pgn: chess.pgn(),
+              moves: newMoves,
+              currentPosition: chess.fen(),
+            });
+          }
         }
-        
-        return true;
+      } catch (e) {
+        // Illegal move detected by chess.js
+        console.warn("Detected an illegal move attempt.", e);
+        toast.warning("Illegal move detected!");
       }
-      return false;
-    } catch (error) {
-      console.error("Invalid move:", error);
-      return false;
     }
   };
 
@@ -130,17 +148,11 @@ export default function GameTracker() {
     if (chess.isCheckmate()) {
       return `Checkmate! ${chess.turn() === "w" ? "Black" : "White"} wins!`;
     }
-    if (chess.isDraw()) {
-      return "Draw!";
-    }
-    if (chess.isStalemate()) {
-      return "Stalemate!";
-    }
-    if (chess.isCheck()) {
-      return "Check!";
-    }
+    if (chess.isDraw()) return "Draw!";
+    if (chess.isStalemate()) return "Stalemate!";
+    if (chess.inCheck()) return "Check!";
     return `${chess.turn() === "w" ? "White" : "Black"} to move`;
-  }, [position]);
+  }, [position, chess]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -153,12 +165,8 @@ export default function GameTracker() {
         </div>
 
         <div className="grid lg:grid-cols-2 gap-6">
-          {/* Left column: Camera and Board */}
           <div className="space-y-6">
-            <CameraView 
-              onFrame={handleCameraFrame} 
-              isActive={isTracking}
-            />
+            <CameraView onFrame={handleCameraFrame} isActive={isTracking} />
 
             <Card>
               <CardHeader>
@@ -166,55 +174,42 @@ export default function GameTracker() {
               </CardHeader>
               <CardContent>
                 <div className="mb-4">
-                  <Chessboard
-                    options={{
-                      position: position,
-                      onPieceDrop: onDrop,
-                    }}
-                  />
+                  <Chessboard position={position} />
                 </div>
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-medium">{gameStatus}</p>
                   {chess.isGameOver() && (
-                    <span className="text-sm text-muted-foreground">Game Over</span>
+                    <span className="text-sm text-muted-foreground">
+                      Game Over
+                    </span>
                   )}
                 </div>
               </CardContent>
             </Card>
           </div>
 
-          {/* Right column: Moves and Controls */}
           <div className="space-y-6">
             <Card>
               <CardHeader>
                 <CardTitle>Game Controls</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <Button 
-                  onClick={startNewGame} 
-                  className="w-full"
-                  disabled={isTracking}
-                >
+                <Button onClick={startNewGame} className="w-full" disabled={isTracking}>
                   <Play className="w-4 h-4 mr-2" />
                   Start New Game
                 </Button>
-                
-                <Button 
-                  onClick={saveGame} 
-                  className="w-full"
-                  variant="outline"
-                  disabled={!currentGameId || !isAuthenticated}
-                >
+
+                <Button onClick={() => setIsTracking(false)} className="w-full" variant="outline" disabled={!isTracking}>
+                  <Square className="w-4 h-4 mr-2" />
+                  Stop Tracking
+                </Button>
+
+                <Button onClick={saveGame} className="w-full" variant="outline" disabled={!currentGameId || !isAuthenticated}>
                   <Save className="w-4 h-4 mr-2" />
                   Save Game
                 </Button>
 
-                <Button 
-                  onClick={exportPGN} 
-                  className="w-full"
-                  variant="outline"
-                  disabled={moves.length === 0}
-                >
+                <Button onClick={exportPGN} className="w-full" variant="outline" disabled={moves.length === 0}>
                   <Download className="w-4 h-4 mr-2" />
                   Export PGN
                 </Button>
@@ -238,45 +233,22 @@ export default function GameTracker() {
                   </p>
                 ) : (
                   <div className="max-h-96 overflow-y-auto">
-                    <div className="grid grid-cols-2 gap-2">
-                      {moves.map((move, index) => (
-                        <div
-                          key={index}
-                          className="flex items-center gap-2 p-2 rounded hover:bg-accent"
+                    <ol className="grid grid-cols-[auto_1fr_1fr] gap-x-4 gap-y-1">
+                      {Array.from({
+                        length: Math.ceil(moves.length / 2),
+                      }).map((_, i) => (
+                        <li
+                          key={i}
+                          className="contents"
                         >
-                          <span className="text-xs text-muted-foreground w-8">
-                            {Math.floor(index / 2) + 1}.
-                          </span>
-                          <span className="font-mono text-sm">{move}</span>
-                        </div>
+                          <div className="text-right text-muted-foreground">{i + 1}.</div>
+                          <div className="font-mono">{moves[i * 2]}</div>
+                          <div className="font-mono">{moves[i * 2 + 1] || ""}</div>
+                        </li>
                       ))}
-                    </div>
+                    </ol>
                   </div>
                 )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Game Information</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Total Moves:</span>
-                  <span className="font-medium">{moves.length}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Current Turn:</span>
-                  <span className="font-medium">
-                    {chess.turn() === "w" ? "White" : "Black"}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Status:</span>
-                  <span className="font-medium">
-                    {chess.isGameOver() ? "Finished" : "In Progress"}
-                  </span>
-                </div>
               </CardContent>
             </Card>
           </div>
