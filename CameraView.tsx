@@ -3,45 +3,51 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Camera, CameraOff } from "lucide-react";
 import { toast } from "sonner";
-import { detectChessboard, drawBoardOverlay, type BoardCorners } from "@/lib/boardDetection";
+import {
+  detectChessboard,
+  drawBoardOverlay,
+  type BoardCorners,
+  type DetectionResult,
+} from "@/lib/boardDetection";
 
 interface CameraViewProps {
-  onFrame?: (imageData: ImageData) => void;
+  onFrame?: (imageData: ImageData, detectionResult: DetectionResult) => void;
   isActive?: boolean;
 }
 
 export function CameraView({ onFrame, isActive = true }: CameraViewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const animationFrameRef = useRef<number>();
+
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [error, setError] = useState<string>("");
   const [isStarted, setIsStarted] = useState(false);
-  const [boardDetected, setBoardDetected] = useState(false);
-  const [boardCorners, setBoardCorners] = useState<BoardCorners | null>(null);
-  const [confidence, setConfidence] = useState(0);
-  const frameIntervalRef = useRef<number | undefined>(undefined);
-  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [detectionResult, setDetectionResult] =
+    useState<DetectionResult | null>(null);
 
   const startCamera = async () => {
     try {
       setError("");
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: {
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          aspectRatio: { ideal: 16 / 9 },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
           facingMode: "environment", // Prefer back camera on mobile
         },
       });
 
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
+        await videoRef.current.play();
         setStream(mediaStream);
         setIsStarted(true);
         toast.success("Camera started successfully");
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to access camera";
+      const message =
+        err instanceof Error ? err.message : "Failed to access camera";
       setError(message);
       toast.error(message);
       console.error("Camera error:", err);
@@ -53,81 +59,79 @@ export function CameraView({ onFrame, isActive = true }: CameraViewProps) {
       stream.getTracks().forEach((track) => track.stop());
       setStream(null);
       setIsStarted(false);
-      if (frameIntervalRef.current) {
-        clearInterval(frameIntervalRef.current);
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
       }
       toast.info("Camera stopped");
     }
   };
 
-  // Capture frames for processing
-  useEffect(() => {
-    if (!isActive || !isStarted || !videoRef.current || !canvasRef.current || !onFrame) {
+  const processFrame = async () => {
+    if (
+      !isStarted ||
+      !videoRef.current ||
+      !canvasRef.current ||
+      videoRef.current.paused ||
+      videoRef.current.ended
+    ) {
       return;
     }
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
-    if (!ctx) return;
+    if (ctx) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
-    // Capture frame every 500ms for processing
-    frameIntervalRef.current = window.setInterval(async () => {
-      if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0);
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        
-        // Detect chessboard
-        const detection = await detectChessboard(imageData);
-        setBoardDetected(detection.detected);
-        setConfidence(detection.confidence);
-        
-        if (detection.detected && detection.corners) {
-          setBoardCorners(detection.corners);
-        }
-        
-        // Call parent callback
-        if (onFrame) {
-          onFrame(imageData);
-        }
+      const detection = await detectChessboard(imageData);
+      setDetectionResult(detection);
+
+      if (onFrame) {
+        onFrame(imageData, detection);
       }
-    }, 500);
+    }
+
+    animationFrameRef.current = requestAnimationFrame(processFrame);
+  };
+
+  useEffect(() => {
+    if (isActive && isStarted) {
+      animationFrameRef.current = requestAnimationFrame(processFrame);
+    } else {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    }
 
     return () => {
-      if (frameIntervalRef.current) {
-        clearInterval(frameIntervalRef.current);
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
       }
     };
   }, [isActive, isStarted, onFrame]);
 
-  // Draw overlay when board is detected
   useEffect(() => {
-    if (!overlayCanvasRef.current || !videoRef.current || !boardCorners) return;
-
     const overlay = overlayCanvasRef.current;
     const video = videoRef.current;
+    if (!overlay || !video || !detectionResult) return;
 
-    // Match overlay canvas size to video display size
-    const rect = video.getBoundingClientRect();
     overlay.width = video.videoWidth;
     overlay.height = video.videoHeight;
 
     const ctx = overlay.getContext("2d");
     if (!ctx) return;
 
-    // Clear previous overlay
     ctx.clearRect(0, 0, overlay.width, overlay.height);
 
-    // Draw board overlay if detected
-    if (boardDetected && boardCorners) {
-      drawBoardOverlay(ctx, boardCorners, "#00ff00");
+    if (detectionResult.detected && detectionResult.corners) {
+      drawBoardOverlay(ctx, detectionResult.corners, "#00ff00");
     }
-  }, [boardDetected, boardCorners]);
+  }, [detectionResult]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       stopCamera();
@@ -135,7 +139,7 @@ export function CameraView({ onFrame, isActive = true }: CameraViewProps) {
   }, []);
 
   return (
-    <Card className="p-0">
+    <Card className="p-4">
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">Camera Feed</h3>
@@ -173,7 +177,6 @@ export function CameraView({ onFrame, isActive = true }: CameraViewProps) {
           )}
           <video
             ref={videoRef}
-            autoPlay
             playsInline
             muted
             className="w-full h-full object-contain"
@@ -181,28 +184,34 @@ export function CameraView({ onFrame, isActive = true }: CameraViewProps) {
           <canvas ref={canvasRef} className="hidden" />
           <canvas
             ref={overlayCanvasRef}
-            className="absolute inset-0 w-full h-full pointer-events-none"
+            className="absolute top-0 left-0 w-full h-full pointer-events-none"
           />
         </div>
 
         {isStarted && (
           <div className="space-y-2">
             <div className="text-sm text-muted-foreground">
-              <p>Position your chessboard in the camera view. Make sure the entire board is visible.</p>
+              <p>
+                Position your chessboard in the camera view. Make sure the
+                entire board is visible.
+              </p>
             </div>
             <div className="flex items-center gap-4 text-sm">
               <div className="flex items-center gap-2">
                 <div
                   className={`w-3 h-3 rounded-full ${
-                    boardDetected ? "bg-green-500" : "bg-red-500"
+                    detectionResult?.detected ? "bg-green-500" : "bg-red-500"
                   }`}
                 />
                 <span>
-                  {boardDetected ? "Board Detected" : "No Board Detected"}
+                  {detectionResult?.detected
+                    ? "Board Detected"
+                    : "No Board Detected"}
                 </span>
               </div>
               <div className="text-muted-foreground">
-                Confidence: {(confidence * 100).toFixed(0)}%
+                Confidence:{" "}
+                {((detectionResult?.confidence || 0) * 100).toFixed(0)}%
               </div>
             </div>
           </div>
@@ -210,4 +219,4 @@ export function CameraView({ onFrame, isActive = true }: CameraViewProps) {
       </div>
     </Card>
   );
-}
+}    
