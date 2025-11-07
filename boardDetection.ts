@@ -18,7 +18,7 @@ export interface DetectionResult {
 
 /**
  * Detect chessboard pattern in the image using edge detection
- * This is a simplified implementation that looks for a square grid pattern
+ * This is an improved heuristic that searches for a region with high edge density.
  */
 export async function detectChessboard(
   imageData: ImageData
@@ -31,35 +31,70 @@ export async function detectChessboard(
     // Convert to grayscale and detect edges
     const edges = detectEdges(data, width, height);
 
-    // Find potential board region (simplified - assumes board is centered)
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const boardSize = Math.min(width, height) * 0.7;
+    // Grid search to find the most likely board area
+    const gridSize = 20; // Search in a 20x20 grid
+    const gridCellWidth = width / gridSize;
+    const gridCellHeight = height / gridSize;
+    let maxEdgeDensity = 0;
+    let bestGridCell = { x: 0, y: 0 };
+
+    for (let gy = 0; gy < gridSize; gy++) {
+      for (let gx = 0; gx < gridSize; gx++) {
+        const xStart = gx * gridCellWidth;
+        const yStart = gy * gridCellHeight;
+        let edgeCount = 0;
+        for (let y = 0; y < gridCellHeight; y++) {
+          for (let x = 0; x < gridCellWidth; x++) {
+            const pixelX = Math.floor(xStart + x);
+            const pixelY = Math.floor(yStart + y);
+            if (edges[pixelY * width + pixelX] > 0) {
+              edgeCount++;
+            }
+          }
+        }
+        const density = edgeCount / (gridCellWidth * gridCellHeight);
+        if (density > maxEdgeDensity) {
+          maxEdgeDensity = density;
+          bestGridCell = { x: gx, y: gy };
+        }
+      }
+    }
+
+    // A real board should have a significant edge density
+    const confidence = Math.min(1, maxEdgeDensity / 0.15); // Heuristic: 15% density is good
+
+    if (confidence < 0.3) {
+      return { detected: false, confidence };
+    }
+
+    // Assume the board is a large square centered around the densest grid cell
+    // This is still a simplification but much better than assuming the center of the image
+    const boardRatio = 0.8; // Assume board takes up 80% of the smaller dimension
+    const boardSize = Math.min(width, height) * boardRatio;
+    const centerX = (bestGridCell.x + 0.5) * gridCellWidth;
+    const centerY = (bestGridCell.y + 0.5) * gridCellHeight;
 
     const corners: BoardCorners = {
       topLeft: {
-        x: centerX - boardSize / 2,
-        y: centerY - boardSize / 2,
+        x: Math.max(0, centerX - boardSize / 2),
+        y: Math.max(0, centerY - boardSize / 2),
       },
       topRight: {
-        x: centerX + boardSize / 2,
-        y: centerY - boardSize / 2,
+        x: Math.min(width, centerX + boardSize / 2),
+        y: Math.max(0, centerY - boardSize / 2),
       },
       bottomLeft: {
-        x: centerX - boardSize / 2,
-        y: centerY + boardSize / 2,
+        x: Math.max(0, centerX - boardSize / 2),
+        y: Math.min(height, centerY + boardSize / 2),
       },
       bottomRight: {
-        x: centerX + boardSize / 2,
-        y: centerY + boardSize / 2,
+        x: Math.min(width, centerX + boardSize / 2),
+        y: Math.min(height, centerY + boardSize / 2),
       },
     };
 
-    // Calculate confidence based on edge density in the detected region
-    const confidence = calculateBoardConfidence(edges, corners, width, height);
-
     return {
-      detected: confidence > 0.3,
+      detected: true,
       corners,
       confidence,
     };
@@ -81,79 +116,40 @@ function detectEdges(
   height: number
 ): Uint8ClampedArray {
   const edges = new Uint8ClampedArray(width * height);
+  const grayscale = new Uint8ClampedArray(width * height);
+
+  // Convert to grayscale first
+  for (let i = 0; i < data.length; i += 4) {
+    const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+    grayscale[i / 4] = gray;
+  }
 
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
-      const idx = (y * width + x) * 4;
+      const getGray = (x: number, y: number) => grayscale[y * width + x];
 
-      // Convert to grayscale
-      const gray =
-        data[idx] * 0.299 + data[idx + 1] * 0.587 + data[idx + 2] * 0.114;
-
-      // Sobel kernels
       const gx =
-        -getGray(data, x - 1, y - 1, width) +
-        getGray(data, x + 1, y - 1, width) -
-        2 * getGray(data, x - 1, y, width) +
-        2 * getGray(data, x + 1, y, width) -
-        getGray(data, x - 1, y + 1, width) +
-        getGray(data, x + 1, y + 1, width);
+        -getGray(x - 1, y - 1) +
+        getGray(x + 1, y - 1) -
+        2 * getGray(x - 1, y) +
+        2 * getGray(x + 1, y) -
+        getGray(x - 1, y + 1) +
+        getGray(x + 1, y + 1);
 
       const gy =
-        -getGray(data, x - 1, y - 1, width) -
-        2 * getGray(data, x, y - 1, width) -
-        getGray(data, x + 1, y - 1, width) +
-        getGray(data, x - 1, y + 1, width) +
-        2 * getGray(data, x, y + 1, width) +
-        getGray(data, x + 1, y + 1, width);
+        -getGray(x - 1, y - 1) -
+        2 * getGray(x, y - 1) -
+        getGray(x + 1, y - 1) +
+        getGray(x - 1, y + 1) +
+        2 * getGray(x, y + 1) +
+        getGray(x + 1, y + 1);
 
       const magnitude = Math.sqrt(gx * gx + gy * gy);
-      edges[y * width + x] = magnitude > 50 ? 255 : 0;
+      edges[y * width + x] = magnitude > 100 ? 255 : 0; // Increased threshold
     }
   }
 
   return edges;
-}
-
-function getGray(
-  data: Uint8ClampedArray,
-  x: number,
-  y: number,
-  width: number
-): number {
-  const idx = (y * width + x) * 4;
-  return data[idx] * 0.299 + data[idx + 1] * 0.587 + data[idx + 2] * 0.114;
-}
-
-/**
- * Calculate confidence that the detected region contains a chessboard
- */
-function calculateBoardConfidence(
-  edges: Uint8ClampedArray,
-  corners: BoardCorners,
-  width: number,
-  height: number
-): number {
-  let edgeCount = 0;
-  let totalPixels = 0;
-
-  const minX = Math.max(0, Math.floor(corners.topLeft.x));
-  const maxX = Math.min(width, Math.ceil(corners.topRight.x));
-  const minY = Math.max(0, Math.floor(corners.topLeft.y));
-  const maxY = Math.min(height, Math.ceil(corners.bottomLeft.y));
-
-  for (let y = minY; y < maxY; y++) {
-    for (let x = minX; x < maxX; x++) {
-      if (edges[y * width + x] > 0) {
-        edgeCount++;
-      }
-      totalPixels++;
-    }
-  }
-
-  // Chessboards have many edges (grid lines)
-  // Typical confidence: 0.1 - 0.5 for a board
-  return totalPixels > 0 ? edgeCount / totalPixels : 0;
 }
 
 /**
@@ -190,20 +186,17 @@ export function drawBoardOverlay(
   drawCorner(corners.bottomRight.x, corners.bottomRight.y);
 
   // Draw grid lines (8x8)
-  ctx.strokeStyle = color;
+  ctx.strokeStyle = "rgba(0, 255, 0, 0.5)"; // Semi-transparent green
   ctx.lineWidth = 1;
-  ctx.globalAlpha = 0.5;
-
+  
   for (let i = 1; i < 8; i++) {
     const ratio = i / 8;
 
     // Vertical lines
     const vTopX = corners.topLeft.x + (corners.topRight.x - corners.topLeft.x) * ratio;
     const vTopY = corners.topLeft.y + (corners.topRight.y - corners.topLeft.y) * ratio;
-    const vBottomX =
-      corners.bottomLeft.x + (corners.bottomRight.x - corners.bottomLeft.x) * ratio;
-    const vBottomY =
-      corners.bottomLeft.y + (corners.bottomRight.y - corners.bottomLeft.y) * ratio;
+    const vBottomX = corners.bottomLeft.x + (corners.bottomRight.x - corners.bottomLeft.x) * ratio;
+    const vBottomY = corners.bottomLeft.y + (corners.bottomRight.y - corners.bottomLeft.y) * ratio;
 
     ctx.beginPath();
     ctx.moveTo(vTopX, vTopY);
@@ -213,16 +206,12 @@ export function drawBoardOverlay(
     // Horizontal lines
     const hLeftX = corners.topLeft.x + (corners.bottomLeft.x - corners.topLeft.x) * ratio;
     const hLeftY = corners.topLeft.y + (corners.bottomLeft.y - corners.topLeft.y) * ratio;
-    const hRightX =
-      corners.topRight.x + (corners.bottomRight.x - corners.topRight.x) * ratio;
-    const hRightY =
-      corners.topRight.y + (corners.bottomRight.y - corners.topRight.y) * ratio;
+    const hRightX = corners.topRight.x + (corners.bottomRight.x - corners.topRight.x) * ratio;
+    const hRightY = corners.topRight.y + (corners.bottomRight.y - corners.topRight.y) * ratio;
 
     ctx.beginPath();
     ctx.moveTo(hLeftX, hLeftY);
     ctx.lineTo(hRightX, hRightY);
     ctx.stroke();
   }
-
-  ctx.globalAlpha = 1;
 }
