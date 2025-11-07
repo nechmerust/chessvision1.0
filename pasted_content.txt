@@ -1,0 +1,89 @@
+Jasně, zde je upravená verze promptu, optimalizovaná pro zadání vývoje webové aplikace, která bude fungovat přímo v prohlížeči a bude přístupná přes odkaz.
+
+Detailed Prompt for AI Development: Web-Based "Chess Vision" - A Browser-Based Chess Move Tracker
+
+Project Overview:
+
+The goal is to develop a sophisticated, web-based application named "Chess Vision" that runs entirely within a modern web browser (Chrome, Firefox, Safari, Edge). The application will use a device's camera (webcam on PC, camera on a smartphone) via browser APIs to recognize a physical chessboard, track piece movements, and automatically record the game's moves. The application will be accessible through a dedicated URL (e.g., www.your-chess-vision-app.com), requiring no installation. Secure cloud-based storage and synchronization of game data are critical.
+
+Core Functionalities:
+
+Browser-Based Board and Piece Recognition:
+
+Camera Access: The application must request and utilize camera access through standard web APIs (like getUserMedia). It should handle permissions gracefully.
+
+Initial Board Setup: The application must detect a standard physical chessboard from the live camera feed within the browser window. This includes recognizing the 8x8 grid, identifying the squares, and correctly orienting the board.
+
+Piece Identification: The app needs to accurately identify all standard chess pieces (King, Queen, Rook, Bishop, Knight, Pawn) for both white and black. It should be robust enough to work with various common Staunton-style chess sets.
+
+Position Mapping: Upon the initial scan, the application must map the identified pieces to their correct squares on a digital representation of the board, establishing the game's position.
+
+Real-Time Move Tracking and Notation:
+
+Move Detection: The application must continuously analyze the camera feed to detect when a piece has been moved. It should be able to differentiate between a completed move and a player simply touching a piece.
+
+Standard Algebraic Notation (SAN): All detected moves must be instantly translated into Standard Algebraic Notation (e.g., "e4", "Nf3", "Bxg7", "O-O") and displayed to the user.
+
+Special Moves: The system must correctly identify and notate special moves, including castling (kingside and queenside), en passant captures, and pawn promotion (with a simple UI for the user to select the promotion piece).
+
+Illegal Move Detection: The application should have an internal chess logic engine to validate moves. If an illegal move is detected, it should provide immediate visual feedback to the user.
+
+Cross-Platform Browser Compatibility:
+
+Responsive Design: The application's interface must be fully responsive, providing an excellent user experience on both desktop and mobile browsers.
+
+Desktop Browsers: Full functionality on the latest versions of Google Chrome, Mozilla Firefox, Apple Safari, and Microsoft Edge.
+
+Mobile Browsers: Full functionality on Safari (iOS) and Chrome (Android), ensuring the mobile camera and touch interface are well-supported.
+
+Secure Data Storage and Synchronization:
+
+Cloud-Based Backend: A secure cloud backend is required to store user accounts and game data.
+
+User Authentication: Implement secure, browser-friendly user authentication (e.g., OAuth 2.0 with Google/Apple sign-in, or email/password).
+
+Game History: Every game recorded by the user must be saved to their account. The history should be easily accessible from their user profile page.
+
+Data Synchronization: A user should be able to start a game on their laptop, continue tracking on their phone, and later analyze the game on any other device simply by logging into their account in the browser.
+
+Data Export: Users must be able to export their games in standard PGN format.
+
+User Interface and User Experience (UI/UX) Features:
+
+Live View: A clean interface showing the live camera feed with a non-intrusive overlay of the recognized board and pieces. A clearly visible move list should update in real-time.
+
+Game Controls: Simple on-screen controls to start a new game, pause, and save the current game.
+
+Manual Correction: An essential feature allowing the user to easily click/tap on the move list or the digital board representation to correct any recognition errors.
+
+User Dashboard: A personal dashboard page where users can view and manage their saved game history.
+
+Technical Specifications and Web-Stack Recommendations:
+
+Frontend Framework: A modern JavaScript framework like React, Vue.js, or Svelte for building a dynamic and responsive user interface.
+
+Computer Vision (In-Browser): Utilize JavaScript libraries for computer vision, such as OpenCV.js. The image processing and recognition logic should run directly in the user's browser to ensure real-time performance and privacy.
+
+Machine Learning Model: For robust piece recognition, a pre-trained CNN model (e.g., in TensorFlow.js format) can be loaded and run in the browser.
+
+Backend: A scalable backend solution like Firebase (Authentication, Firestore, Cloud Functions) or a custom server using Node.js/Python.
+
+Chess Logic: A JavaScript-based chess engine library like chess.js for move validation.
+
+Real-time Communication: WebSockets (e.g., using Socket.IO) could be used for instant data synchronization if needed, although standard HTTPS requests are sufficient for most features.
+
+Deployment and Accessibility:
+
+Hosting: The application must be deployed on a reliable cloud hosting platform (e.g., Vercel, Netlify, AWS, Google Cloud).
+
+URL Access: The final application must be accessible to any user with a modern browser by navigating to a simple, public URL you provide (e.g., www.your-chess-vision-app.com).
+
+Success Criteria:
+
+The web application achieves over 98% accuracy in move detection with a standard chess set in good lighting.
+
+The application runs smoothly without significant lag in a standard web browser on an average desktop and modern smartphone.
+
+The user experience is seamless, allowing a new user to start tracking a game within a minute of visiting the URL.
+
+User data is securely stored and synchronized reliably across sessions and devices.
